@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import utils
+import utils_spec
 
 
 class BaseModel(nn.Module):
@@ -14,7 +14,7 @@ class BaseModel(nn.Module):
         self.transform = self.get_attribute('transform')
 
     def get_attribute(self, name, default=None, required=True):
-        return utils.get_attribute(self.config, name, default, required)
+        return utils_spec.get_attribute(self.config, name, default, required)
 
     def set_attribute(self, name, value):
         self.config[name] = value

@@ -1,11 +1,13 @@
 import numpy as np
 from collections import OrderedDict
 from model import BaseModel
-
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision as tv
+import dataset as dt
+
 
 class BaseVAE(BaseModel):
     def __init__(self, config, device=None):
@@ -144,3 +146,7 @@ class VAELoss(nn.Module):
         kld = self.beta * 0.5 * torch.sum(torch.exp(logvar) + torch.square(mean) - 1. - logvar, dim=1).mean()
         loss = recon + kld
         return loss, recon, kld
+
+
+
+

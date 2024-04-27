@@ -101,7 +101,6 @@ class FilterPeaks:
         else:
             return spec
 
-
 class TopNPeaks:
     def __init__(self, n):
         self.n = n
