@@ -1,0 +1,86 @@
+Start at Time: Mon Mar  4 21:55:10 2024
+input args:
+ {
+    "data_dir":"../data",
+    "data_name":"qm9",
+    "save_dir":"results/qm9_64gnn_128-64lin_1-1mask_0d6noise_convlu1",
+    "save_interval":20,
+    "load_params":0,
+    "load_snapshot":"",
+    "learning_rate":0.001,
+    "lr_decay":0.999995,
+    "max_epochs":200,
+    "gpu":0,
+    "save_epochs":1,
+    "batch_size":256,
+    "shuffle":0,
+    "num_workers":0,
+    "enc_conv_dim":[
+        [
+            256,
+            128
+        ],
+        128
+    ],
+    "enc_linear_dim":[
+        128
+    ],
+    "dec_dim":[
+        128,
+        128
+    ],
+    "b_n_flow":10,
+    "b_n_block":1,
+    "b_hidden_ch":"128,128",
+    "b_conv_lu":1,
+    "a_n_flow":27,
+    "a_n_block":1,
+    "a_hidden_gnn":"64",
+    "a_hidden_lin":"128,64",
+    "mask_row_size_list":"1",
+    "mask_row_stride_list":"1",
+    "seed":1,
+    "debug":1,
+    "learn_dist":1,
+    "noise_scale":0.6
+}
+loading train/valid split information from: ../data/valid_idx_qm9.json
+Model params:
+/Users/nikolaikjaernielsen/Desktop/GF-VAE-main/mflow/../mflow/models/basic.py:160: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /Users/runner/work/_temp/anaconda/conda-bld/pytorch_1708025538153/work/torch/csrc/utils/tensor_numpy.cpp:212.)
+  w_s = torch.from_numpy(w_s)
+--------------------  -----------------
+b_n_type              4
+b_n_flow              10
+b_n_block             1
+b_n_squeeze           3
+b_hidden_ch           [128, 128]
+b_affine              True
+b_conv_lu             1
+a_n_node              9
+a_n_type              5
+a_hidden_gnn          [64]
+a_hidden_lin          [128, 64]
+a_n_flow              27
+a_n_block             1
+mask_row_size_list    [1]
+mask_row_stride_list  [1]
+a_affine              True
+device                0
+path
+learn_dist            1
+seed                  1
+noise_scale           0.6
+enc_conv_dim          [[256, 128], 128]
+enc_linear_dim        [128]
+dec_dim               [128, 128]
+--------------------  -----------------
+Loading file ../data/qm9_relgcn_kekulized_ggnp.npz
+==========================================
+Load data done! Time 0.33 seconds
+Data shuffle: 0, Number of data loader workers: 0!
+Using GPU device:0!
+Num Minibatch-size: 256
+Num Iter/Epoch: 523
+Num epoch: 200
+==========================================
+In epoch 1, Time: Mon Mar  4 21:55:10 2024

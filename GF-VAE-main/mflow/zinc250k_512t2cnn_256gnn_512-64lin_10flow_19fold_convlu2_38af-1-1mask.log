@@ -1,0 +1,84 @@
+Start at Time: Mon Mar  4 21:50:14 2024
+input args:
+ {
+    "data_dir":"../data",
+    "data_name":"zinc250k",
+    "save_dir":"results/zinc250k_512t2cnn_256gnn_512-64lin_10flow_19fold_convlu2_38af-1-1mask",
+    "save_interval":20,
+    "load_params":0,
+    "load_snapshot":"",
+    "learning_rate":0.001,
+    "lr_decay":0.999995,
+    "max_epochs":200,
+    "gpu":0,
+    "save_epochs":1,
+    "batch_size":256,
+    "shuffle":0,
+    "num_workers":0,
+    "enc_conv_dim":[
+        [
+            256,
+            128
+        ],
+        128
+    ],
+    "enc_linear_dim":[
+        128
+    ],
+    "dec_dim":[
+        128,
+        128
+    ],
+    "b_n_flow":10,
+    "b_n_block":1,
+    "b_hidden_ch":"512,512",
+    "b_conv_lu":2,
+    "a_n_flow":38,
+    "a_n_block":1,
+    "a_hidden_gnn":"256",
+    "a_hidden_lin":"512,64",
+    "mask_row_size_list":"1",
+    "mask_row_stride_list":"1",
+    "seed":1,
+    "debug":1,
+    "learn_dist":1,
+    "noise_scale":0.6
+}
+loading train/valid split information from: ../data/valid_idx_zinc.json
+Model params:
+--------------------  -----------------
+b_n_type              4
+b_n_flow              10
+b_n_block             1
+b_n_squeeze           19
+b_hidden_ch           [512, 512]
+b_affine              True
+b_conv_lu             2
+a_n_node              38
+a_n_type              10
+a_hidden_gnn          [256]
+a_hidden_lin          [512, 64]
+a_n_flow              38
+a_n_block             1
+mask_row_size_list    [1]
+mask_row_stride_list  [1]
+a_affine              True
+device                0
+path
+learn_dist            1
+seed                  1
+noise_scale           0.6
+enc_conv_dim          [[256, 128], 128]
+enc_linear_dim        [128]
+dec_dim               [128, 128]
+--------------------  -----------------
+Loading file ../data/zinc250k_relgcn_kekulized_ggnp.npz
+Traceback (most recent call last):
+  File "/Users/nikolaikjaernielsen/Desktop/GF-VAE-main/mflow/train_model.py", line 332, in <module>
+    train()
+  File "/Users/nikolaikjaernielsen/Desktop/GF-VAE-main/mflow/train_model.py", line 200, in train
+    dataset = NumpyTupleDataset.load(os.path.join(args.data_dir, data_file), transform=transform_fn)  # 133885
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/nikolaikjaernielsen/Desktop/GF-VAE-main/mflow/../data/data_loader.py", line 93, in load
+    raise ValueError('Invalid filepath {} for dataset'.format(filepath))
+ValueError: Invalid filepath ../data/zinc250k_relgcn_kekulized_ggnp.npz for dataset
