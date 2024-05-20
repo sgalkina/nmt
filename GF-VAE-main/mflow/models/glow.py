@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from mflow.models.basic import ZeroConv2d, ActNorm, InvConv2dLU, InvConv2d, InvRotationLU, InvRotation, ActNorm2D
-from mflow.models.coupling import AffineCoupling, GraphAffineCoupling
+from mflow.models.coupling_cond import AffineCoupling, GraphAffineCoupling
 
 
 class Flow(nn.Module):
@@ -24,7 +24,7 @@ class Flow(nn.Module):
         # May add more parameter to further control net in the coupling layer
         self.coupling = AffineCoupling(in_channel, hidden_channels, affine=affine, mask_swap=mask_swap)
 
-    def forward(self, input):
+    def forward(self, input, C):
         out, logdet = self.actnorm(input)
         # out = input
         # logdet = 0
@@ -32,7 +32,7 @@ class Flow(nn.Module):
             out, det1 = self.invconv(out)
         else:
             det1 = 0
-        out, det2 = self.coupling(out)
+        out, det2 = self.coupling(out, C)
 
         logdet = logdet + det1
         if det2 is not None:
@@ -40,8 +40,8 @@ class Flow(nn.Module):
 
         return out, logdet
 
-    def reverse(self, output):
-        input = self.coupling.reverse(output)
+    def reverse(self, output, C):
+        input = self.coupling.reverse(output, C)
         if self.invconv:
             input = self.invconv.reverse(input)
         input = self.actnorm.reverse(input)
@@ -100,7 +100,7 @@ class FlowOnGraph(nn.Module):
         # self.invconv = InvRotationLU(n_node) # Not stable for inverse!!! delete!!!
         self.coupling = GraphAffineCoupling(n_node, in_dim, hidden_dim_dict, masked_row, affine=affine)
 
-    def forward(self, adj, input):  # (2,4,9,9) (2,2,9,5)
+    def forward(self, adj, input, C):  # (2,4,9,9) (2,2,9,5)
         # if input are two channel identical, normalized results are 0
         # change other normalization for input
         out, logdet = self.actnorm(input)
@@ -108,15 +108,15 @@ class FlowOnGraph(nn.Module):
         # logdet = torch.zeros(1).to(input)
         # out, det1 = self.invconv(out)
         det1 = 0
-        out, det2 = self.coupling(adj, out)
+        out, det2 = self.coupling(adj, out, C)
 
         logdet = logdet + det1
         if det2 is not None:
             logdet = logdet + det2
         return out, logdet
 
-    def reverse(self, adj, output):
-        input = self.coupling.reverse(adj, output)
+    def reverse(self, adj, output, C):
+        input = self.coupling.reverse(adj, output, C)
         # input = self.invconv.reverse(input)
         input = self.actnorm.reverse(input) # change other normalization for input
         return input
@@ -141,22 +141,24 @@ class Block(nn.Module):
 
         # self.prior = ZeroConv2d(squeeze_dim, squeeze_dim*2)
 
-    def forward(self, input):
+    def forward(self, input, C):
         out = self._squeeze(input)
+        # C_out = self._squeeze(C)
         logdet = 0
 
         for flow in self.flows:
-            out, det = flow(out)
+            out, det = flow(out, C)
             logdet = logdet + det
 
         out = self._unsqueeze(out)
         return out, logdet  # , log_p, z_new
 
-    def reverse(self, output):  # , eps=None, reconstruct=False):
+    def reverse(self, output, C):  # , eps=None, reconstruct=False):
         input = self._squeeze(output)
+        # C_out = self._squeeze(C)
 
         for flow in self.flows[::-1]:
-            input = flow.reverse(input)
+            input = flow.reverse(input, C)
 
         unsqueezed = self._unsqueeze(input)
         return unsqueezed
@@ -279,19 +281,19 @@ class BlockOnGraph(nn.Module):
             self.flows.append(FlowOnGraph(n_node, in_dim, hidden_dim_dict, masked_row=masked_row, affine=affine))
         # self.prior = ZeroConv2d(2, 4)
 
-    def forward(self, adj, input):
+    def forward(self, adj, input, C):
         out = input
         logdet = 0
         for flow in self.flows:
-            out, det = flow(adj, out)
+            out, det = flow(adj, out, C)
             logdet = logdet + det
             # it seems logdet is not influenced
         return out, logdet
 
-    def reverse(self, adj, output):
+    def reverse(self, adj, output, C):
         input = output
         for flow in self.flows[::-1]:
-            input = flow.reverse(adj, input)
+            input = flow.reverse(adj, input, C)
         return input
 
 
@@ -306,20 +308,20 @@ class Glow(nn.Module):
             # self.blocks.append(
             #     Block2(n_channel, n_flow, squeeze_fold, hidden_channel, affine=affine, conv_lu=conv_lu))  # delete
 
-    def forward(self, input):
+    def forward(self, input, C):
         logdet = 0
         out = input
 
         for block in self.blocks:
-            out, det = block(out)
+            out, det = block(out, C)
             logdet = logdet + det
 
         return out, logdet
 
-    def reverse(self, z):  # _list, reconstruct=False):
+    def reverse(self, z, C):  # _list, reconstruct=False):
         h = z
         for i, block in enumerate(self.blocks[::-1]):
-            h = block.reverse(h)
+            h = block.reverse(h, C)
 
         return h
 
@@ -341,21 +343,21 @@ class GlowOnGraph(nn.Module):
             mask_row_stride = mask_row_stride_list[i]
             self.blocks.append(BlockOnGraph(n_node, in_dim, hidden_dim_dict, n_flow, mask_row_size, mask_row_stride, affine=affine))
 
-    def forward(self, adj, x):
+    def forward(self, adj, x, C):
         # adj (bs, 4,9,9), xx:(bs, 9,5)
         logdet = 0
         out = x
         for block in self.blocks:
-            out, det = block(adj, out)
+            out, det = block(adj, out, C)
             logdet = logdet + det
 
         return out, logdet
 
-    def reverse(self, adj, z):
+    def reverse(self, adj, z, C):
         # (bs, 4,9,9), zz: (bs, 9, 5)
         input = z
         for i, block in enumerate(self.blocks[::-1]):
-            input = block.reverse(adj, input)
+            input = block.reverse(adj, input, C)
 
         return input
 

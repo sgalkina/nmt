@@ -132,13 +132,13 @@ class MoFlow(nn.Module):
             affine=hyper_params.a_affine  # True
         )
 
-    def forward(self, adj, x, adj_normalized, device=-1):
+    def forward(self, adj, x, adj_normalized, context, device=-1):
         """
         :param adj:  (256,4,9,9)
         :param x: (256,9,5)
         :return:
         """
-        z, z_mu, z_logvar = self.graphenc(adj, x) 
+        z, z_mu, z_logvar = self.graphenc(adj, x) # (batch_size, 4*9*9+9*5)
         vae_para = [z_mu, z_logvar, z]
         
 #         pred_arom = self.aromaticenc(adj, x)
@@ -151,7 +151,7 @@ class MoFlow(nn.Module):
                 h = h/2.0 - 0.5 + torch.rand_like(x) * 0.4  #/ 2.0  similar to X + U(0, 0.8)   *0.5*0.8=0.4
             else:
                 h = h + torch.rand_like(x) * self.noise_scale  # noise_scale default 0.9
-        h, sum_log_det_jacs_x = self.atom_model(adj_normalized, h)
+        h, sum_log_det_jacs_x = self.atom_model(adj_normalized, h, context)
 
         # add uniform noise to adjacency tensors
         if self.training:
@@ -160,15 +160,15 @@ class MoFlow(nn.Module):
             else:
                 adj = adj + torch.rand_like(adj) * self.noise_scale  # (256,4,9,9) noise_scale default 0.9  
                 
-        adj_h, sum_log_det_jacs_adj = self.bond_model(adj)
+        adj_h, sum_log_det_jacs_adj = self.bond_model(adj, context)
 
         out = [h, adj_h]  # combine to one tensor later bs * dim tensor
 
         return out, [sum_log_det_jacs_x, sum_log_det_jacs_adj], vae_para#, pred_arom
 
     
-    def reverse(self, z, true_adj=None):  # change!!! z[0] --> for z_x, z[1] for z_adj, a list!!!
-        """
+    def reverse(self, z, context):  # change!!! z[0] --> for z_x, z[1] for z_adj, a list!!!
+        """ 
         Returns a molecule, given its latent vector.
         :param z: latent vector. Shape: [B, N*N*M + N*T]    (100,369) 369=9*9 * 4 + 9*5
             B = Batch size, N = number of atoms, M = number of bond types,
@@ -182,25 +182,26 @@ class MoFlow(nn.Module):
             z_x = z[:, :self.a_size]  # (100, 45)
             z_adj = z[:, self.a_size:]  # (100, 324)
 
-            if true_adj is None:
-                h_adj = z_adj.reshape(batch_size, self.b_n_type, self.a_n_node, self.a_n_node)  # (100,4,9,9)
-                h_adj = self.bond_model.reverse(h_adj)
+            # if true_adj is None:
+            h_adj = z_adj.reshape(batch_size, self.b_n_type, self.a_n_node, self.a_n_node)  # (100,4,9,9)
+            # h_adj = self.bond_model.reverse(h_adj, h_adj)
+            h_adj = self.bond_model.reverse(h_adj, context)
 
-                if self.noise_scale == 0:
-                    h_adj = (h_adj + 0.5) * 2
-                # decode adjacency matrix from h_adj
-                adj = h_adj
-                adj = adj + adj.permute(0, 1, 3, 2)
-                adj = adj / 2
-                adj = adj.softmax(dim=1)  # (100,4!!!,9,9) prob. for edge 0-3 for every pair of nodes
-                max_bond = adj.max(dim=1).values.reshape(batch_size, -1, self.a_n_node, self.a_n_node)  # (100,1,9,9)
-                adj = torch.floor(adj / max_bond)  # (100,4,9,9) /  (100,1,9,9) -->  (100,4,9,9)
-            else:
-                adj = true_adj
+            if self.noise_scale == 0:
+                h_adj = (h_adj + 0.5) * 2
+            # decode adjacency matrix from h_adj
+            adj = h_adj
+            adj = adj + adj.permute(0, 1, 3, 2)
+            adj = adj / 2
+            adj = adj.softmax(dim=1)  # (100,4!!!,9,9) prob. for edge 0-3 for every pair of nodes
+            max_bond = adj.max(dim=1).values.reshape(batch_size, -1, self.a_n_node, self.a_n_node)  # (100,1,9,9)
+            adj = torch.floor(adj / max_bond)  # (100,4,9,9) /  (100,1,9,9) -->  (100,4,9,9)
+            # else:
+            #     adj = true_adj
 
             h_x = z_x.reshape(batch_size, self.a_n_node, self.a_n_type)
             adj_normalized = rescale_adj(adj).to(h_x)
-            h_x = self.atom_model.reverse(adj_normalized, h_x)
+            h_x = self.atom_model.reverse(adj_normalized, h_x, context)
             if self.noise_scale == 0:
                 h_x = (h_x + 0.5) * 2
             # h_x = torch.sigmoid(h_x)  # to delete for logit

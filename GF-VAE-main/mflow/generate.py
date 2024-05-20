@@ -17,18 +17,17 @@ from rdkit.Chem import Draw, AllChem
 from rdkit import Chem
 from rdkit import Chem, DataStructs
 
-from data import transform_qm9, transform_zinc250k, transform_nkn2024, transform_hmdb
-from data.transform_zinc250k import zinc250_atomic_num_list, transform_fn_zinc250k
-from data.transform_nkn2024 import nkn2024_atomic_num_list, transform_fn_nkn2024
-from data.transform_hmdb import hmdb_atomic_num_list, transform_fn_hmdb
+import torch.nn.functional as F
+from torch.autograd import Variable 
 
+from data import transform_qm9, transform_zinc250k
+from data.transform_zinc250k import zinc250_atomic_num_list, transform_fn_zinc250k
 from mflow.models.hyperparams import Hyperparameters
 from mflow.models.utils import check_validity, adj_to_smiles, check_novelty, valid_mol, construct_mol, _to_numpy_array, correct_mol,valid_mol_can_with_seg
 from mflow.utils.model_utils import load_model, get_latent_vec
 # from mflow.models.model import MoFlow, rescale_adj
 from mflow.models.graphvae_flow import MoFlow, rescale_adj
 # from mflow.models.model_vae import MoVAE
-import csv
 
 import mflow.utils.environment as env
 
@@ -41,10 +40,10 @@ from mflow.utils.timereport import TimeReport
 import functools
 print = functools.partial(print, flush=True)
 
-# Suppress RDKit warnings
+
 from rdkit import RDLogger
-lg = RDLogger.logger()
-lg.setLevel(RDLogger.CRITICAL)
+
+RDLogger.DisableLog('rdApp.*')     
 
 # def _to_numpy_array(a):
 #     if isinstance(a, chainer.Variable):
@@ -413,12 +412,23 @@ def plot_colormap():
         fig.savefig('a{}.pdf'.format(idx))
 
 
+def get_fingerprint(smiles):
+    mol = Chem.MolFromSmiles(smiles)
+    mfpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=2,fpSize=2048)
+
+    if mol is not None: # Check if molecule conversion
+        # return AllChem.GetMorganFingerprintAsBitVect(mol, radius=2, nBits=2048)
+        return mfpgen.GetFingerprint(mol)
+    else:
+        return None
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_dir", type=str, default='./results')
-    parser.add_argument("--data_dir", type=str, default='../data')
-    parser.add_argument('--data_name', type=str, default='qm9', choices=['qm9', 'zinc250k', 'ours', 'hmdb', 'hmdb_test','nkn2024'], help='dataset name')
+    parser.add_argument("--data_dir", type=str, default='data')
+    parser.add_argument('--data_name', type=str, default='qm9', choices=['qm9', 'zinc250k', 'ours'], help='dataset name')
     # parser.add_argument('--molecule_file', type=str, default='qm9_relgcn_kekulized_ggnp.npz',
     #                     help='path to molecule dataset')
     parser.add_argument("--snapshot-path", "-snapshot", type=str, required=True)
@@ -474,6 +484,8 @@ if __name__ == "__main__":
 
     if args.data_name == 'qm9':
         atomic_num_list = [6, 7, 8, 9, 0]
+        # atomic_num_list = [6, 7, 8, 9, 15, 16, 17, 35, 53, 0]
+        # atomic_num_list = [6, 7, 8, 9, 15, 16, 17, 34, 35, 53, 0]
         transform_fn = transform_qm9.transform_fn
         # true_data = TransformDataset(true_data, transform_qm9.transform_fn)
         valid_idx = transform_qm9.get_val_ids()
@@ -485,21 +497,6 @@ if __name__ == "__main__":
         # true_data = TransformDataset(true_data, transform_fn_zinc250k)
         valid_idx = transform_zinc250k.get_val_ids()
         molecule_file = 'zinc250k_relgcn_kekulized_ggnp.npz'
-    elif args.data_name == 'nkn2024':
-        atomic_num_list = nkn2024_atomic_num_list
-        transform_fn = transform_nkn2024.transform_fn_nkn2024
-        valid_idx = transform_nkn2024.get_val_ids()
-        molecule_file = 'nkn2024_relgcn_kekulized_ggnp.npz'
-    elif args.data_name == 'hmdb':
-        atomic_num_list = hmdb_atomic_num_list
-        transform_fn = transform_hmdb.transform_fn_hmdb
-        valid_idx = transform_hmdb.get_val_ids()
-        molecule_file = 'hmdb_relgcn_kekulized_ggnp.npz'
-    elif args.data_name == 'hmdb_test':
-        atomic_num_list = hmdb_atomic_num_list
-        transform_fn = transform_hmdb.transform_fn_hmdb
-        valid_idx = transform_hmdb.get_val_ids()
-        molecule_file = 'hmdb_relgcn_kekulized_ggnp.npz'
 
     batch_size = args.batch_size
     dataset = NumpyTupleDataset.load(os.path.join(args.data_dir, molecule_file), transform=transform_fn)
@@ -525,45 +522,59 @@ if __name__ == "__main__":
     # 1. Reconstruction
     if args.reconstruct:
         train_dataloader = torch.utils.data.DataLoader(train, batch_size=batch_size)
+        test_dataloader = torch.utils.data.DataLoader(test, batch_size=batch_size)
+
         reconstruction_rate_list = []
-        smiles_pairs = []
-        max_iter = len(train_dataloader)
-        for i, batch in enumerate(train_dataloader):
-            x = batch[0].to(device)
-            adj = batch[1].to(device)
+        max_iter = len(test_dataloader)
+        for i, batch in enumerate(test_dataloader):
+            x = batch[0].to(device)  # (256,9,5)
+            adj = batch[1].to(device)  # (256,4,9, 9)
             adj_normalized = rescale_adj(adj).to(device)
 
-            ### Use the VAE latent vector for reconstruction
-            out, _, vae_para = model(adj, x, adj_normalized)
-            z = vae_para[2].reshape(vae_para[2].shape[0], -1)
-            adj_rev, x_rev = model.reverse(z) 
+            adj_flatten = torch.flatten(adj, start_dim=1)
+            x_flatten = torch.flatten(x, start_dim=1)
+            context = torch.cat([adj_flatten, x_flatten], 1)
+            _, L = context.shape
 
-            ### For NF reconstructions 
-            """
-            z, _, _, = model(adj, x, adj_normalized)
-            z0 = z[0].reshape(z[0].shape[0], -1)
-            z1 = z[1].reshape(z[1].shape[0], -1)
-            adj_rev, x_rev = model.reverse(torch.cat([z0,z1], dim=1))"""
-            
+            context_flatten = Variable(F.pad(context, (1, 9*5*10-1-L), "constant", 0), requires_grad=True)
+
+            out, _, vae_para = model(adj, x, adj_normalized, context=context_flatten)
+            z = vae_para[2].reshape(vae_para[2].shape[0], -1)
+            adj_rev, x_rev = model.reverse(z, context_flatten) 
+
+            # z, _, _, = model(adj, x, adj_normalized)
+            # z0 = z[0].reshape(z[0].shape[0], -1)
+            # z1 = z[1].reshape(z[1].shape[0], -1)
+            # adj_rev, x_rev = model.reverse(torch.cat([z0,z1], dim=1))
+
             val_res = check_validity(adj_rev, x_rev, atomic_num_list)
             reverse_smiles = adj_to_smiles(adj_rev.cpu(), x_rev.cpu(), atomic_num_list)
             train_smiles = adj_to_smiles(adj.cpu(), x.cpu(), atomic_num_list)
-            for original, reconstructed in zip(train_smiles, reverse_smiles):
-                smiles_pairs.append((original, reconstructed))
 
-            lb = np.array([int(a != b) for a, b in zip(train_smiles, reverse_smiles)])
-            reconstruction_rate = 1.0 - lb.mean()
-            reconstruction_rate_list.append(reconstruction_rate)
-                # novel_r, abs_novel_r = check_novelty(val_res['valid_smiles'], train_smiles, x.shape[0])
+            # lb = np.array([int(a!=b) for a, b in zip(train_smiles, reverse_smiles)])
+            # idx = np.where(lb)[0]
+            # if len(idx) > 0:
+            #     for k in idx:
+            #         print(i*batch_size+k, 'train: ', train_smiles[k], ' reverse: ', reverse_smiles[k])
+            # reconstruction_rate = 1.0 - lb.mean()
+            # reconstruction_rate_list.append(reconstruction_rate)
+
+            for rev, rec in zip(reverse_smiles, train_smiles):
+                orig_fp = get_fingerprint(rev)
+                recon_fp = get_fingerprint(rec)
+
+                if orig_fp is not None and recon_fp is not None:
+                    reconstruction_rate = DataStructs.TanimotoSimilarity(orig_fp, recon_fp)
+                    reconstruction_rate_list.append(reconstruction_rate)
+                else:
+                    reconstruction_rate = np.nan
+
+            # novel_r, abs_novel_r = check_novelty(val_res['valid_smiles'], train_smiles, x.shape[0])
             print("iter/total: {}/{}, reconstruction_rate:{}".format(i, max_iter, reconstruction_rate))
-
-            reconstruction_rate_total = np.array(reconstruction_rate_list).mean()
-        print("reconstruction_rate for all the train data:{} in {}".format(reconstruction_rate_total, len(train)))
-        with open('smiles_pairs_2.csv', 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Original SMILES', 'Reconstructed SMILES'])
-            writer.writerows(smiles_pairs)
-        print("SMILES pairs saved to smiles_pairs.csv")
+        print('train: ', rec, ' reverse: ', rev)
+        reconstruction_rate_total = np.nanmean(np.array(reconstruction_rate_list))
+        std_rec = np.nanstd(np.array(reconstruction_rate_list))
+        print("reconstruction_rate for all the test data:{} in {}, std {}".format(reconstruction_rate_total, len(reconstruction_rate_list), std_rec))
         exit(0)
 
     # 2. interpolation generation

@@ -1,4 +1,3 @@
-from rdkit import RDLogger
 import json
 import os
 import sys
@@ -10,19 +9,21 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-# Suppress RDKit warnings
-lg = RDLogger.logger()
-lg.setLevel(RDLogger.CRITICAL)
-
 from data.data_loader import NumpyTupleDataset
 from mflow.models.hyperparams import Hyperparameters
 # from mflow.models.model import MoFlow, rescale_adj
 from mflow.models.graphvae_flow import MoFlow, rescale_adj
 from mflow.models.utils import check_validity, save_mol_png
+from torch.autograd import Variable 
 
 import time
 from mflow.utils.timereport import TimeReport
 from mflow.generate import generate_mols
+import torch.nn.functional as F
+
+from rdkit import RDLogger
+
+RDLogger.DisableLog('rdApp.*')     
 
 import functools
 print = functools.partial(print, flush=True)
@@ -31,8 +32,8 @@ print = functools.partial(print, flush=True)
 def get_parser():
     parser = argparse.ArgumentParser()
     # data I/O
-    parser.add_argument('-i', '--data_dir', type=str, default='../data', help='Location for the dataset')
-    parser.add_argument('--data_name', type=str, default='qm9', choices=['qm9', 'zinc250k', 'nkn2024', 'hmdb'], help='dataset name')
+    parser.add_argument('-i', '--data_dir', type=str, default='data', help='Location for the dataset')
+    parser.add_argument('--data_name', type=str, default='qm9', choices=['qm9', 'zinc250k'], help='dataset name')
     # parser.add_argument('-f', '--data_file', type=str, default='qm9_relgcn_kekulized_ggnp.npz', help='Name of the dataset')
     parser.add_argument('-o', '--save_dir', type=str, default='results/qm9',
                         help='Location for parameter checkpoints and samples')
@@ -54,9 +55,14 @@ def get_parser():
     parser.add_argument('--shuffle', type=strtobool, default='false', help='Shuffle the data batch')
     parser.add_argument('--num_workers', type=int, default=0, help='Number of workers in the data loader')
 
+    # # evaluation
+    # parser.add_argument('--sample_batch_size', type=int, default=16,
+    #                     help='How many samples to process in paralell during sampling?')
+    # reproducibility
+    
     # For encoder & decoder model
-    parser.add_argument('--enc_conv_dim', default=[[256, 128],128], help='number of conv filters in the grpah encoder')
-    parser.add_argument('--enc_linear_dim', default=[128], help='linear dims in graph encoder')
+    parser.add_argument('--enc_conv_dim', default=[[1024,512,256,128],128], help='number of conv filters in the grpah encoder')
+    parser.add_argument('--enc_linear_dim', default=[1024,512,256,128], help='linear dims in graph encoder')
     parser.add_argument('--dec_dim', default=[128, 128], help='linear dims in graph decoder')
     # For bonds
     parser.add_argument('--b_n_flow', type=int, default=4,
@@ -122,7 +128,16 @@ def train():
     enc_conv_dim = [[256, 128],128]
     enc_linear_dim = [128]
     dec_dim = [128, 128]
-     
+
+    # enc_conv_dim = [[1024,512,256,128],128]
+    # enc_linear_dim = [1024,512,256,128]
+    # dec_dim = [128, 128]
+
+#     enc_conv_dim = [[16],16]
+#     enc_linear_dim = [16]
+#     dec_dim = [128]
+    
+    
     b_hidden_ch = [int(d) for d in args.b_hidden_ch.strip(',').split(',')]
     a_hidden_gnn = [int(d) for d in args.a_hidden_gnn.strip(',').split(',')]
     a_hidden_lin = [int(d) for d in args.a_hidden_lin.strip(',').split(',')]
@@ -133,6 +148,7 @@ def train():
         data_file = 'qm9_relgcn_kekulized_ggnp.npz'
         transform_fn = transform_qm9.transform_fn
         atomic_num_list = [6, 7, 8, 9, 0]
+        # atomic_num_list = [6, 7, 8, 9, 15, 16, 17, 34, 35, 53, 0]
         b_n_type = 4
         b_n_squeeze = 3    # 3
         a_n_node = 9
@@ -143,31 +159,13 @@ def train():
         data_file = 'zinc250k_relgcn_kekulized_ggnp.npz'
         transform_fn = transform_zinc250k.transform_fn_zinc250k
         atomic_num_list = transform_zinc250k.zinc250_atomic_num_list  # [6, 7, 8, 9, 15, 16, 17, 35, 53, 0]
+        # mlp_channels = [1024, 512]
+        # gnn_channels = {'gcn': [16, 128], 'hidden': [256, 64]}
         b_n_type = 4
         b_n_squeeze = 19   # 19
         a_n_node = 38
         a_n_type = len(atomic_num_list)  # 10
         valid_idx = transform_zinc250k.get_val_ids()
-    elif args.data_name == 'nkn2024':
-        from data import transform_nkn2024
-        data_file = 'nkn2024_relgcn_kekulized_ggnp.npz'
-        transform_fn = transform_nkn2024.transform_fn_nkn2024
-        atomic_num_list = transform_nkn2024.nkn2024_atomic_num_list  # [6, 7, 8, 9, 15, 16, 17, 20, 35, 53, 0]
-        b_n_type = 4
-        b_n_squeeze = 19   # 19
-        a_n_node = 38
-        a_n_type = len(atomic_num_list)  # 10
-        valid_idx = transform_nkn2024.get_val_ids()
-    elif args.data_name == 'hmdb':
-        from data import transform_hmdb
-        data_file = 'hmdb_relgcn_kekulized_ggnp.npz'
-        transform_fn = transform_hmdb.transform_fn_hmdb
-        atomic_num_list = transform_hmdb.hmdb_atomic_num_list  # [6, 7, 8, 9, 15, 16, 17, 20, 35, 53, 0]
-        b_n_type = 4
-        b_n_squeeze = 19   # 19
-        a_n_node = 38
-        a_n_type = len(atomic_num_list)  # 10
-        valid_idx = transform_hmdb.get_val_ids()
     else:
         raise ValueError('Only support qm9 and zinc250k right now. '
                          'Parameters need change a little bit for other dataset.')
@@ -212,6 +210,17 @@ def train():
     # Datasets:
     dataset = NumpyTupleDataset.load(os.path.join(args.data_dir, data_file), transform=transform_fn)  # 133885
 
+#     if len(valid_idx) > 0:
+#         train_idx = [t for t in range(len(dataset)) if t not in valid_idx]  # 120803 = 133885-13082
+#         # n_train = len(train_idx)  # 120803
+#         train = torch.utils.data.Subset(dataset, train_idx)  # 120,803
+#         test = torch.utils.data.Subset(dataset, valid_idx)  # 13,082
+#     else:
+#         torch.manual_seed(args.seed)
+#         train, test = torch.utils.data.random_split(
+#             dataset,
+#             [int(len(dataset) * 0.8), len(dataset) - int(len(dataset) * 0.8)])
+
     train_dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size,
                                                    shuffle=args.shuffle, num_workers=args.num_workers)
 
@@ -220,6 +229,7 @@ def train():
     print('Data shuffle: {}, Number of data loader workers: {}!'.format(args.shuffle, args.num_workers))
     if args.gpu >= 0:
         print('Using GPU device:{}!'.format(args.gpu))
+#     print('Num Train-size: {}'.format(len(train)))
     print('Num Minibatch-size: {}'.format(args.batch_size))
     print('Num Iter/Epoch: {}'.format(len(train_dataloader)))
     print('Num epoch: {}'.format(args.max_epochs))
@@ -242,16 +252,31 @@ def train():
             adj = batch[1].to(device)  # (256,4,9, 9)
             adj_normalized = rescale_adj(adj).to(device)
 
+            # TODO: the part of the code that replaces the spectrum
+            adj_flatten = torch.flatten(adj, start_dim=1)
+            x_flatten = torch.flatten(x, start_dim=1)
+            context = torch.cat([adj_flatten, x_flatten], 1)
+            _, L = context.shape
+
+            context_flatten = Variable(F.pad(context, (1, 9*5*10-1-L), "constant", 0), requires_grad=True)
+
             # Forward, backward and optimize
-            z, sum_log_det_jacs, vae_para = model(adj, x, adj_normalized)
+            z, sum_log_det_jacs, vae_para = model(adj, x, adj_normalized, context=context_flatten)
             kl_loss = get_kl_loss(vae_para[0], vae_para[1])
             z_plain = torch.cat((z[0].reshape(z[0].shape[0],-1),z[1].reshape(z[1].shape[0],-1)),dim=1)
             recon_loss = torch.sqrt(nn.MSELoss()(z_plain, vae_para[2]))
+
+            adjm, xm = model.reverse(vae_para[2], context=context_flatten)
+            recon_loss_adj = torch.sqrt(nn.MSELoss()(adj, adjm))
+            recon_loss_x = torch.sqrt(nn.MSELoss()(x, xm))
+
             if multigpu:
                 nll = model.module.log_prob(z, sum_log_det_jacs, vae_para)
             else:
                 nll = model.log_prob(z, sum_log_det_jacs, vae_para)
-            loss = nll[0] + nll[1] + kl_loss + recon_loss
+            coef = 1000
+            loss = nll[0]*coef + nll[1]*coef + kl_loss + recon_loss*coef + recon_loss_adj + recon_loss_x
+            # loss = nll[0] + nll[1] + kl_loss + recon_loss
             loss.backward()
             optimizer.step()
             tr.update()
@@ -259,37 +284,45 @@ def train():
             # Print log info
             if (i+1) % log_step == 0:  # i % args.log_step == 0:
                 print('Epoch [{}/{}], Iter [{}/{}], loglik: {:.5f}, nll_x: {:.5f},'
-                      ' nll_adj: {:.5f}, kl_loss: {:.5f}, {:.2f} sec/iter, {:.2f} iters/sec: '.
+                      ' nll_adj: {:.5f}, kl_loss: {:.5f}, {:.2f} sec/iter, {:.2f} iters/sec:  '
+                      ' recon_loss: {:.5f}, recon_loss_adj: {:.5f}, recon_loss_x: {:.5f}'.
                       format(epoch+1, args.max_epochs, i+1, iter_per_epoch,
                              loss.item(), nll[0].item(), nll[1].item(), kl_loss,
-                             tr.get_avg_time_per_iter(), tr.get_avg_iter_per_sec()))
+                             tr.get_avg_time_per_iter(), tr.get_avg_iter_per_sec(),
+                             recon_loss, recon_loss_adj, recon_loss_x))
                 tr.print_summary()
 
-        if debug:
-            def print_validity(ith):
-                model.eval()
-                if multigpu:
-                    adj, x = generate_mols(model.module, batch_size=100, device=device)
-                else:
-                    adj, x = generate_mols(model, batch_size=1000, device=device)
-                result = check_validity(adj, x, atomic_num_list, correct_validity=True)
-                valid_mols = result['valid_mols']
-                uniques.append(result['unique_ratio']*result['valid_ratio']/100.0)
-                model.train()
-            print_validity(epoch+1)
+#         if debug:
+#             def print_validity(ith):
+#                 model.eval()
+#                 if multigpu:
+#                     adj, x = generate_mols(model.module, batch_size=100, device=device)
+#                 else:
+#                     adj, x = generate_mols(model, batch_size=1000, device=device)
+#                 result = check_validity(adj, x, atomic_num_list, correct_validity=True)
+#                 valid_mols = result['valid_mols']
+#                 uniques.append(result['unique_ratio']*result['valid_ratio']/100.0)
+# #                 mol_dir = os.path.join(args.save_dir, 'generated_{}'.format(ith))
+# #                 os.makedirs(mol_dir, exist_ok=True)
+# #                 for ind, mol in enumerate(valid_mols):
+# #                     save_mol_png(mol, os.path.join(mol_dir, '{}.png'.format(ind)))
+#                 model.train()
+#             print_validity(epoch+1)
 
         # The same report for each epoch
         print('Epoch [{}/{}], Iter [{}/{}], loglik: {:.5f}, nll_x: {:.5f},'
-              ' nll_adj: {:.5f}, kl_loss: {:.5f}, {:.2f} sec/iter, {:.2f} iters/sec: '.
+              ' nll_adj: {:.5f}, kl_loss: {:.5f}, {:.2f} sec/iter, {:.2f} iters/sec '
+                ' recon_loss: {:.5f}, recon_loss_adj: {:.5f}, recon_loss_x: {:.5f}'.
               format(epoch + 1, args.max_epochs, -1, iter_per_epoch,
                      loss.item(), nll[0].item(), nll[1].item(), kl_loss,
-                     tr.get_avg_time_per_iter(), tr.get_avg_iter_per_sec()))
+                     tr.get_avg_time_per_iter(), tr.get_avg_iter_per_sec(),
+                     recon_loss.item(), recon_loss_adj.item(), recon_loss_x.item()))
         tr.print_summary()
 
-# Save the model checkpoints
+        # Save the model checkpoints
         save_epochs = args.save_epochs
         if save_epochs == -1:
-             save_epochs = args.max_epochs
+            save_epochs = args.max_epochs
         if (epoch + 1) % save_epochs == 0:
             if multigpu:
                 torch.save(model.module.state_dict(), os.path.join(
@@ -299,10 +332,37 @@ def train():
                 args.save_dir, 'model_snapshot_epoch_{}'.format(epoch + 1)))
             tr.end()
 
+#     print("[Training Ends], Start at {}, End at {}".format(time.ctime(start), time.ctime()))
+#     print('totally {} seconds '.format(time.time()-start))
+#     print('{} seconds per epoch'.format((time.time()-start)/args.max_epochs))
+#     print(uniques)
+#     with open(os.path.join(args.save_dir, 'unique.txt'),'w') as f:
+#         for line in uniques:
+#             f.write(str(round(line,3)))
+#             f.write('\n')
+
+#     model.load_state_dict(torch.load(os.path.join(args.save_dir, 'model_snapshot_epoch_50')))
+#     model = model.to(device)
+#     if args.data_name == 'qm9':
+#         aggre_embeds = np.ones((1,9,128))
+#     else:
+#         aggre_embeds = np.ones((1,38,10))
+#     for i, batch in enumerate(train_dataloader):
+#         x = batch[0].to(device)  # (256,9,5)
+#         adj = batch[1].to(device) # (256,4,9, 9)
+#         atom_embed = model.graphenc.embed(adj,x)
+#         aggre_embeds = np.concatenate((aggre_embeds, atom_embed.cpu().numpy()),axis=0)          
+#     if adj.shape[2]==9:    
+#         np.save('qm9node.npy',aggre_embeds[1:])
+          
+
 
 if __name__ == '__main__':
     # with torch.autograd.set_detect_anomaly(True):
     train()
+# 42.4s/epoch for qm9_datatest_5_13
+# 147.4s/epoch for zinc250k_datatest_5_15
+
 
 # python train_model.py --data_name qm9  --batch_size 256  --max_epochs 50 --gpu 0  --debug True  --save_dir=results/qm9  --b_n_flow 5  --b_hidden_ch 128  --a_n_flow 13 --a_hidden_gnn 64  --a_hidden_lin 64  --mask_row_size_list 1 --mask_row_stride_list 1 --noise_scale 0.6 --b_conv_lu 1
 
